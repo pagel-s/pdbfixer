@@ -29,6 +29,7 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 from __future__ import absolute_import
+
 __author__ = "Peter Eastman"
 __version__ = "1.7"
 
@@ -44,10 +45,13 @@ from openmm.app.forcefield import NonbondedGenerator
 # and also implementations in older versions.
 try:
     from openmm.app.internal import compiled
+
     matchResidue = compiled.matchResidueToTemplate
 except ImportError:
     matchResidue = app.forcefield._matchResidue
 
+import re
+from Bio import File
 import numpy as np
 import numpy.linalg as lin
 import sys
@@ -57,7 +61,7 @@ import math
 
 from pkg_resources import resource_filename
 
-if sys.version_info >= (3,0):
+if sys.version_info >= (3, 0):
     from urllib.request import urlopen
     from io import StringIO
 else:
@@ -65,58 +69,590 @@ else:
     from cStringIO import StringIO
 
 substitutions = {
-    '2AS':'ASP', '3AH':'HIS', '5HP':'GLU', '5OW':'LYS', 'ACL':'ARG', 'AGM':'ARG', 'AIB':'ALA', 'ALM':'ALA', 'ALO':'THR', 'ALY':'LYS', 'ARM':'ARG',
-    'ASA':'ASP', 'ASB':'ASP', 'ASK':'ASP', 'ASL':'ASP', 'ASQ':'ASP', 'AYA':'ALA', 'BCS':'CYS', 'BHD':'ASP', 'BMT':'THR', 'BNN':'ALA',
-    'BUC':'CYS', 'BUG':'LEU', 'C5C':'CYS', 'C6C':'CYS', 'CAS':'CYS', 'CCS':'CYS', 'CEA':'CYS', 'CGU':'GLU', 'CHG':'ALA', 'CLE':'LEU', 'CME':'CYS',
-    'CSD':'ALA', 'CSO':'CYS', 'CSP':'CYS', 'CSS':'CYS', 'CSW':'CYS', 'CSX':'CYS', 'CXM':'MET', 'CY1':'CYS', 'CY3':'CYS', 'CYG':'CYS',
-    'CYM':'CYS', 'CYQ':'CYS', 'DAH':'PHE', 'DAL':'ALA', 'DAR':'ARG', 'DAS':'ASP', 'DCY':'CYS', 'DGL':'GLU', 'DGN':'GLN', 'DHA':'ALA',
-    'DHI':'HIS', 'DIL':'ILE', 'DIV':'VAL', 'DLE':'LEU', 'DLY':'LYS', 'DNP':'ALA', 'DPN':'PHE', 'DPR':'PRO', 'DSN':'SER', 'DSP':'ASP',
-    'DTH':'THR', 'DTR':'TRP', 'DTY':'TYR', 'DVA':'VAL', 'EFC':'CYS', 'FLA':'ALA', 'FME':'MET', 'GGL':'GLU', 'GL3':'GLY', 'GLZ':'GLY',
-    'GMA':'GLU', 'GSC':'GLY', 'HAC':'ALA', 'HAR':'ARG', 'HIC':'HIS', 'HIP':'HIS', 'HMR':'ARG', 'HPQ':'PHE', 'HTR':'TRP', 'HYP':'PRO',
-    'IAS':'ASP', 'IIL':'ILE', 'IYR':'TYR', 'KCX':'LYS', 'LLP':'LYS', 'LLY':'LYS', 'LTR':'TRP', 'LYM':'LYS', 'LYZ':'LYS', 'MAA':'ALA', 'MEN':'ASN',
-    'MHS':'HIS', 'MIS':'SER', 'MK8':'LEU', 'MLE':'LEU', 'MPQ':'GLY', 'MSA':'GLY', 'MSE':'MET', 'MVA':'VAL', 'NEM':'HIS', 'NEP':'HIS', 'NLE':'LEU',
-    'NLN':'LEU', 'NLP':'LEU', 'NMC':'GLY', 'OAS':'SER', 'OCS':'CYS', 'OMT':'MET', 'PAQ':'TYR', 'PCA':'GLU', 'PEC':'CYS', 'PHI':'PHE',
-    'PHL':'PHE', 'PR3':'CYS', 'PRR':'ALA', 'PTR':'TYR', 'PYX':'CYS', 'SAC':'SER', 'SAR':'GLY', 'SCH':'CYS', 'SCS':'CYS', 'SCY':'CYS',
-    'SEL':'SER', 'SEP':'SER', 'SET':'SER', 'SHC':'CYS', 'SHR':'LYS', 'SMC':'CYS', 'SOC':'CYS', 'STY':'TYR', 'SVA':'SER', 'TIH':'ALA',
-    'TPL':'TRP', 'TPO':'THR', 'TPQ':'ALA', 'TRG':'LYS', 'TRO':'TRP', 'TYB':'TYR', 'TYI':'TYR', 'TYQ':'TYR', 'TYS':'TYR', 'TYY':'TYR'
+    "2AS": "ASP",
+    "3AH": "HIS",
+    "5HP": "GLU",
+    "5OW": "LYS",
+    "ACL": "ARG",
+    "AGM": "ARG",
+    "AIB": "ALA",
+    "ALM": "ALA",
+    "ALO": "THR",
+    "ALY": "LYS",
+    "ARM": "ARG",
+    "ASA": "ASP",
+    "ASB": "ASP",
+    "ASK": "ASP",
+    "ASL": "ASP",
+    "ASQ": "ASP",
+    "AYA": "ALA",
+    "BCS": "CYS",
+    "BHD": "ASP",
+    "BMT": "THR",
+    "BNN": "ALA",
+    "BUC": "CYS",
+    "BUG": "LEU",
+    "C5C": "CYS",
+    "C6C": "CYS",
+    "CAS": "CYS",
+    "CCS": "CYS",
+    "CEA": "CYS",
+    "CGU": "GLU",
+    "CHG": "ALA",
+    "CLE": "LEU",
+    "CME": "CYS",
+    "CSD": "ALA",
+    "CSO": "CYS",
+    "CSP": "CYS",
+    "CSS": "CYS",
+    "CSW": "CYS",
+    "CSX": "CYS",
+    "CXM": "MET",
+    "CY1": "CYS",
+    "CY3": "CYS",
+    "CYG": "CYS",
+    "CYM": "CYS",
+    "CYQ": "CYS",
+    "DAH": "PHE",
+    "DAL": "ALA",
+    "DAR": "ARG",
+    "DAS": "ASP",
+    "DCY": "CYS",
+    "DGL": "GLU",
+    "DGN": "GLN",
+    "DHA": "ALA",
+    "DHI": "HIS",
+    "DIL": "ILE",
+    "DIV": "VAL",
+    "DLE": "LEU",
+    "DLY": "LYS",
+    "DNP": "ALA",
+    "DPN": "PHE",
+    "DPR": "PRO",
+    "DSN": "SER",
+    "DSP": "ASP",
+    "DTH": "THR",
+    "DTR": "TRP",
+    "DTY": "TYR",
+    "DVA": "VAL",
+    "EFC": "CYS",
+    "FLA": "ALA",
+    "FME": "MET",
+    "GGL": "GLU",
+    "GL3": "GLY",
+    "GLZ": "GLY",
+    "GMA": "GLU",
+    "GSC": "GLY",
+    "HAC": "ALA",
+    "HAR": "ARG",
+    "HIC": "HIS",
+    "HIP": "HIS",
+    "HMR": "ARG",
+    "HPQ": "PHE",
+    "HTR": "TRP",
+    "HYP": "PRO",
+    "IAS": "ASP",
+    "IIL": "ILE",
+    "IYR": "TYR",
+    "KCX": "LYS",
+    "LLP": "LYS",
+    "LLY": "LYS",
+    "LTR": "TRP",
+    "LYM": "LYS",
+    "LYZ": "LYS",
+    "MAA": "ALA",
+    "MEN": "ASN",
+    "MHS": "HIS",
+    "MIS": "SER",
+    "MK8": "LEU",
+    "MLE": "LEU",
+    "MPQ": "GLY",
+    "MSA": "GLY",
+    "MSE": "MET",
+    "MVA": "VAL",
+    "NEM": "HIS",
+    "NEP": "HIS",
+    "NLE": "LEU",
+    "NLN": "LEU",
+    "NLP": "LEU",
+    "NMC": "GLY",
+    "OAS": "SER",
+    "OCS": "CYS",
+    "OMT": "MET",
+    "PAQ": "TYR",
+    "PCA": "GLU",
+    "PEC": "CYS",
+    "PHI": "PHE",
+    "PHL": "PHE",
+    "PR3": "CYS",
+    "PRR": "ALA",
+    "PTR": "TYR",
+    "PYX": "CYS",
+    "SAC": "SER",
+    "SAR": "GLY",
+    "SCH": "CYS",
+    "SCS": "CYS",
+    "SCY": "CYS",
+    "SEL": "SER",
+    "SEP": "SER",
+    "SET": "SER",
+    "SHC": "CYS",
+    "SHR": "LYS",
+    "SMC": "CYS",
+    "SOC": "CYS",
+    "STY": "TYR",
+    "SVA": "SER",
+    "TIH": "ALA",
+    "TPL": "TRP",
+    "TPO": "THR",
+    "TPQ": "ALA",
+    "TRG": "LYS",
+    "TRO": "TRP",
+    "TYB": "TYR",
+    "TYI": "TYR",
+    "TYQ": "TYR",
+    "TYS": "TYR",
+    "TYY": "TYR",
 }
-proteinResidues = ['ALA', 'ASN', 'CYS', 'GLU', 'HIS', 'LEU', 'MET', 'PRO', 'THR', 'TYR', 'ARG', 'ASP', 'GLN', 'GLY', 'ILE', 'LYS', 'PHE', 'SER', 'TRP', 'VAL']
-rnaResidues = ['A', 'G', 'C', 'U', 'I']
-dnaResidues = ['DA', 'DG', 'DC', 'DT', 'DI']
+proteinResidues = [
+    "ALA",
+    "ASN",
+    "CYS",
+    "GLU",
+    "HIS",
+    "LEU",
+    "MET",
+    "PRO",
+    "THR",
+    "TYR",
+    "ARG",
+    "ASP",
+    "GLN",
+    "GLY",
+    "ILE",
+    "LYS",
+    "PHE",
+    "SER",
+    "TRP",
+    "VAL",
+]
+rnaResidues = ["A", "G", "C", "U", "I"]
+dnaResidues = ["DA", "DG", "DC", "DT", "DI"]
 
+
+# header Parsing
+def _get_journal(inl):
+    # JRNL        AUTH   L.CHEN,M.DOI,F.S.MATHEWS,A.Y.CHISTOSERDOV,           2BBK   7
+    journal = ""
+    for l in inl:
+        if re.search(r"\AJRNL", l):
+            journal += l[19:72].lower()
+    journal = re.sub(r"\s\s+", " ", journal)
+    return journal
+
+
+def _get_references(inl):
+    # REMARK   1 REFERENCE 1                                                  1CSE  11
+    # REMARK   1  AUTH   W.BODE,E.PAPAMOKOS,D.MUSIL                           1CSE  12
+    references = []
+    actref = ""
+    for l in inl:
+        if re.search(r"\AREMARK   1", l):
+            if re.search(r"\AREMARK   1 REFERENCE", l):
+                if actref != "":
+                    actref = re.sub(r"\s\s+", " ", actref)
+                    if actref != " ":
+                        references.append(actref)
+                    actref = ""
+            else:
+                actref += l[19:72].lower()
+
+    if actref != "":
+        actref = re.sub(r"\s\s+", " ", actref)
+        if actref != " ":
+            references.append(actref)
+    return references
+
+
+# bring dates to format: 1909-01-08
+def _format_date(pdb_date):
+    """Convert dates from DD-Mon-YY to YYYY-MM-DD format (PRIVATE)."""
+    date = ""
+    year = int(pdb_date[7:])
+    if year < 50:
+        century = 2000
+    else:
+        century = 1900
+    date = str(century + year) + "-"
+    all_months = [
+        "xxx",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ]
+    month = str(all_months.index(pdb_date[3:6]))
+    if len(month) == 1:
+        month = "0" + month
+    date = date + month + "-" + pdb_date[:2]
+    return date
+
+
+def _chop_end_codes(line):
+    """Chops lines ending with  '     1CSA  14' and the like (PRIVATE)."""
+    return re.sub(r"\s\s\s\s+[\w]{4}.\s+\d*\Z", "", line)
+
+
+def _chop_end_misc(line):
+    """Chops lines ending with  '     14-JUL-97  1CSA' and the like (PRIVATE)."""
+    return re.sub(r"\s+\d\d-\w\w\w-\d\d\s+[1-9][0-9A-Z]{3}\s*\Z", "", line)
+
+
+def _nice_case(line):
+    """Make A Lowercase String With Capitals (PRIVATE)."""
+    line_lower = line.lower()
+    s = ""
+    i = 0
+    nextCap = 1
+    while i < len(line_lower):
+        c = line_lower[i]
+        if c >= "a" and c <= "z" and nextCap:
+            c = c.upper()
+            nextCap = 0
+        elif c in " .,;:\t-_":
+            nextCap = 1
+        s += c
+        i += 1
+    return s
+
+
+def parse_pdb_header(infile):
+    """Return the header lines of a pdb file as a dictionary.
+
+    Dictionary keys are: head, deposition_date, release_date, structure_method,
+    resolution, structure_reference, journal_reference, author and
+    compound.
+    """
+    header = []
+    with File.as_handle(infile) as f:
+        for l in f:
+            record_type = l[0:6]
+            if record_type in ("ATOM  ", "HETATM", "MODEL "):
+                break
+            else:
+                header.append(l)
+    return _parse_pdb_header_list(header)
+
+
+def _parse_remark_465(line):
+    """Parse missing residue remarks.
+
+    Returns a dictionary describing the missing residue.
+    The specification for REMARK 465 at
+    http://www.wwpdb.org/documentation/file-format-content/format33/remarks2.html#REMARK%20465
+    only gives templates, but does not say they have to be followed.
+    So we assume that not all pdb-files with a REMARK 465 can be understood.
+
+    Returns a dictionary with the following keys:
+    "model", "res_name", "chain", "ssseq", "insertion"
+    """
+    if line:
+        # Note that line has been stripped.
+        assert (
+            line[0] != " " and line[-1] not in "\n "
+        ), "line has to be stripped"
+    pattern = re.compile(
+        r"""
+        (\d+\s[\sA-Z][\sA-Z][A-Z] |   # Either model number + residue name
+            [A-Z]{1,3})               # Or only residue name with 1 (RNA) to 3 letters
+        \s ([A-Za-z0-9])              # A single character chain
+        \s+(-?\d+[A-Za-z]?)$            # Residue number: A digit followed by an optional
+                                      # insertion code (Hetero-flags make no sense in
+                                      # context with missing res)
+        """,
+        re.VERBOSE,
+    )
+    match = pattern.match(line)
+    if match is None:
+        return None
+    residue = {}
+    if " " in match.group(1):
+        model, residue["res_name"] = match.group(1).split()
+        residue["model"] = int(model)
+    else:
+        residue["model"] = None
+        residue["res_name"] = match.group(1)
+    residue["chain"] = match.group(2)
+    try:
+        residue["ssseq"] = int(match.group(3))
+    except ValueError:
+        residue["insertion"] = match.group(3)[-1]
+        residue["ssseq"] = int(match.group(3)[:-1])
+    else:
+        residue["insertion"] = None
+    return residue
+
+
+def _parse_remark_470(line):
+    if line:
+        # Note that line has been stripped.
+        assert (
+            line[0] != " " and line[-1] not in "\n "
+        ), "line has to be stripped"
+
+    pattern = re.compile(
+        r"""
+        (\d+\s[\sA-Z][\sA-Z][A-Z] |   # Either model number + residue name
+            [A-Z]{1,3})               # Or only residue name with 1 (RNA) to 3 letters
+        \s ([A-Za-z0-9])              # A single character chain
+        \s+ (-?\d+)
+        \s+ (\w{1,3}.*\w{1,3})$            # Residue number: A digit followed by an optional
+                                      # insertion code (Hetero-flags make no sense in
+                                      # context with missing res)
+        """,
+        re.VERBOSE,
+    )
+    match = pattern.match(line)
+    if match is None:
+        return None
+    residue = {}
+    if " " in match.group(1):
+        model, residue["res_name"] = match.group(1).split()
+        residue["model"] = int(model)
+    else:
+        residue["model"] = None
+        residue["res_name"] = match.group(1)
+    residue["chain"] = match.group(2)
+    try:
+        residue["SSEQI"] = int(match.group(3))
+    except ValueError:
+        ...
+    else:
+        # match all
+        residue["ATOMS"] = match.group(4).split()
+        residue["insertion"] = None
+    return residue
+
+
+def _parse_pdb_header_list(header):
+    # database fields
+    pdbh_dict = {
+        "name": "",
+        "head": "",
+        "idcode": "",
+        "deposition_date": "1909-01-08",
+        "release_date": "1909-01-08",
+        "structure_method": "unknown",
+        "resolution": None,
+        "structure_reference": "unknown",
+        "journal_reference": "unknown",
+        "author": "",
+        "compound": {"1": {"misc": ""}},
+        "source": {"1": {"misc": ""}},
+        "has_missing_residues": False,
+        "missing_residues": [],
+        "has_missing_atoms": False,
+        "missing_atoms": [],
+    }
+
+    pdbh_dict["structure_reference"] = _get_references(header)
+    pdbh_dict["journal_reference"] = _get_journal(header)
+    comp_molid = "1"
+    last_comp_key = "misc"
+    last_src_key = "misc"
+
+    for hh in header:
+        h = re.sub(r"[\s\n\r]*\Z", "", hh)  # chop linebreaks off
+        # key=re.sub("\s.+\s*","",h)
+        key = h[:6].strip()
+        # tail=re.sub("\A\w+\s+\d*\s*","",h)
+        tail = h[10:].strip()
+        # print("%s:%s" % (key, tail)
+
+        # From here, all the keys from the header are being parsed
+        if key == "TITLE":
+            name = _chop_end_codes(tail).lower()
+            pdbh_dict["name"] = " ".join([pdbh_dict["name"], name]).strip()
+        elif key == "HEADER":
+            rr = re.search(r"\d\d-\w\w\w-\d\d", tail)
+            if rr is not None:
+                pdbh_dict["deposition_date"] = _format_date(
+                    _nice_case(rr.group())
+                )
+            rr = re.search(r"\s+([1-9][0-9A-Z]{3})\s*\Z", tail)
+            if rr is not None:
+                pdbh_dict["idcode"] = rr.group(1)
+            head = _chop_end_misc(tail).lower()
+            pdbh_dict["head"] = head
+        elif key == "COMPND":
+            tt = re.sub(r"\;\s*\Z", "", _chop_end_codes(tail)).lower()
+            # look for E.C. numbers in COMPND lines
+            rec = re.search(r"\d+\.\d+\.\d+\.\d+", tt)
+            if rec:
+                pdbh_dict["compound"][comp_molid]["ec_number"] = rec.group()
+                tt = re.sub(r"\((e\.c\.)*\d+\.\d+\.\d+\.\d+\)", "", tt)
+            tok = tt.split(":")
+            if len(tok) >= 2:
+                ckey = tok[0]
+                cval = re.sub(r"\A\s*", "", tok[1])
+                if ckey == "mol_id":
+                    pdbh_dict["compound"][cval] = {"misc": ""}
+                    comp_molid = cval
+                    last_comp_key = "misc"
+                else:
+                    pdbh_dict["compound"][comp_molid][ckey] = cval
+                    last_comp_key = ckey
+            else:
+                pdbh_dict["compound"][comp_molid][last_comp_key] += (
+                    tok[0] + " "
+                )
+        elif key == "SOURCE":
+            tt = re.sub(r"\;\s*\Z", "", _chop_end_codes(tail)).lower()
+            tok = tt.split(":")
+            # print(tok)
+            if len(tok) >= 2:
+                ckey = tok[0]
+                cval = re.sub(r"\A\s*", "", tok[1])
+                if ckey == "mol_id":
+                    pdbh_dict["source"][cval] = {"misc": ""}
+                    comp_molid = cval
+                    last_src_key = "misc"
+                else:
+                    pdbh_dict["source"][comp_molid][ckey] = cval
+                    last_src_key = ckey
+            else:
+                pdbh_dict["source"][comp_molid][last_src_key] += tok[0] + " "
+        elif key == "KEYWDS":
+            kwd = _chop_end_codes(tail).lower()
+            if "keywords" in pdbh_dict:
+                pdbh_dict["keywords"] += " " + kwd
+            else:
+                pdbh_dict["keywords"] = kwd
+        elif key == "EXPDTA":
+            expd = _chop_end_codes(tail)
+            # chop junk at end of lines for some structures
+            expd = re.sub(r"\s\s\s\s\s\s\s.*\Z", "", expd)
+            # if re.search('\Anmr',expd,re.IGNORECASE): expd='nmr'
+            # if re.search('x-ray diffraction',expd,re.IGNORECASE): expd='x-ray diffraction'
+            pdbh_dict["structure_method"] = expd.lower()
+        elif key == "CAVEAT":
+            # make Annotation entries out of these!!!
+            pass
+        elif key == "REVDAT":
+            rr = re.search(r"\d\d-\w\w\w-\d\d", tail)
+            if rr is not None:
+                pdbh_dict["release_date"] = _format_date(
+                    _nice_case(rr.group())
+                )
+        elif key == "JRNL":
+            # print("%s:%s" % (key, tail))
+            if "journal" in pdbh_dict:
+                pdbh_dict["journal"] += tail
+            else:
+                pdbh_dict["journal"] = tail
+        elif key == "AUTHOR":
+            auth = _nice_case(_chop_end_codes(tail))
+            if "author" in pdbh_dict:
+                pdbh_dict["author"] += auth
+            else:
+                pdbh_dict["author"] = auth
+        elif key == "REMARK":
+            if re.search("REMARK   2 RESOLUTION.", hh):
+                r = _chop_end_codes(re.sub("REMARK   2 RESOLUTION.", "", hh))
+                r = re.sub(r"\s+ANGSTROM.*", "", r)
+                try:
+                    pdbh_dict["resolution"] = float(r)
+                except ValueError:
+                    # print('nonstandard resolution %r' % r)
+                    pdbh_dict["resolution"] = None
+            elif hh.startswith("REMARK 465"):
+                if tail:
+                    pdbh_dict["has_missing_residues"] = True
+                    missing_res_info = _parse_remark_465(tail)
+                    if missing_res_info:
+                        pdbh_dict["missing_residues"].append(missing_res_info)
+            elif hh.startswith("REMARK 470"):
+                if tail:
+                    pdbh_dict["has_missing_atoms"] = True
+                    missing_atom_info = _parse_remark_470(tail)
+                    if missing_atom_info:
+                        pdbh_dict["missing_atoms"].append(missing_atom_info)
+            elif hh.startswith("REMARK  99 ASTRAL"):
+                if tail:
+                    remark_99_keyval = tail.replace("ASTRAL ", "").split(": ")
+                    if (
+                        isinstance(remark_99_keyval, list)
+                        and len(remark_99_keyval) == 2
+                    ):
+                        if "astral" not in pdbh_dict:
+                            pdbh_dict["astral"] = {
+                                remark_99_keyval[0]: remark_99_keyval[1]
+                            }
+                        else:
+                            pdbh_dict["astral"][
+                                remark_99_keyval[0]
+                            ] = remark_99_keyval[1]
+        else:
+            # print(key)
+            pass
+    if pdbh_dict["structure_method"] == "unknown":
+        res = pdbh_dict["resolution"]
+        if res is not None and res > 0.0:
+            pdbh_dict["structure_method"] = "x-ray diffraction"
+    return pdbh_dict
+
+
+# PDBfixer
 class Sequence(object):
     """Sequence holds the sequence of a chain, as specified by SEQRES records."""
+
     def __init__(self, chainId, residues):
         self.chainId = chainId
         self.residues = residues
 
+
 class ModifiedResidue(object):
     """ModifiedResidue holds information about a modified residue, as specified by a MODRES record."""
+
     def __init__(self, chainId, number, residueName, standardName):
         self.chainId = chainId
         self.number = number
         self.residueName = residueName
         self.standardName = standardName
 
+
 def _guessFileFormat(file, filename):
     """Guess whether a file is PDB or PDBx/mmCIF based on its filename and contents."""
     filename = filename.lower()
-    if '.pdbx' in filename or '.cif' in filename:
-        return 'pdbx'
-    if '.pdb' in filename:
-        return 'pdb'
+    if ".pdbx" in filename or ".cif" in filename:
+        return "pdbx"
+    if ".pdb" in filename:
+        return "pdb"
     for line in file:
-        if line.startswith('data_') or line.startswith('loop_'):
+        if line.startswith("data_") or line.startswith("loop_"):
             file.seek(0)
-            return 'pdbx'
-        if line.startswith('HEADER') or line.startswith('REMARK') or line.startswith('TITLE '):
+            return "pdbx"
+        if (
+            line.startswith("HEADER")
+            or line.startswith("REMARK")
+            or line.startswith("TITLE ")
+        ):
             file.seek(0)
-            return 'pdb'
+            return "pdb"
 
     # It's certainly not a valid PDBx/mmCIF.  Guess that it's a PDB.
 
     file.seek(0)
-    return 'pdb'
+    return "pdb"
+
 
 def _overlayPoints(points1, points2):
     """Given two sets of points, determine the translation and rotation that matches them as closely as possible.
@@ -141,27 +677,28 @@ def _overlayPoints(points1, points2):
     if len(points1) == 0:
         return (mm.Vec3(0, 0, 0), np.identity(3), mm.Vec3(0, 0, 0))
     if len(points1) == 1:
-        return (points1[0], np.identity(3), -1*points2[0])
+        return (points1[0], np.identity(3), -1 * points2[0])
 
     # Compute centroids.
 
-    center1 = unit.sum(points1)/float(len(points1))
-    center2 = unit.sum(points2)/float(len(points2))
+    center1 = unit.sum(points1) / float(len(points1))
+    center2 = unit.sum(points2) / float(len(points2))
 
     # Compute R matrix.
 
     R = np.zeros((3, 3))
     for p1, p2 in zip(points1, points2):
-        x = p1-center1
-        y = p2-center2
+        x = p1 - center1
+        y = p2 - center2
         for i in range(3):
             for j in range(3):
-                R[i][j] += y[i]*x[j]
+                R[i][j] += y[i] * x[j]
 
     # Use an SVD to compute the rotation matrix.
 
     (u, s, v) = lin.svd(R)
-    return (-1*center2, np.dot(u, v).transpose(), center1)
+    return (-1 * center2, np.dot(u, v).transpose(), center1)
+
 
 def _findUnoccupiedDirection(point, positions):
     """Given a point in space and a list of atom positions, find the direction in which the local density of atoms is lowest."""
@@ -169,19 +706,21 @@ def _findUnoccupiedDirection(point, positions):
     point = point.value_in_unit(unit.nanometers)
     direction = mm.Vec3(0, 0, 0)
     for pos in positions.value_in_unit(unit.nanometers):
-        delta = pos-point
+        delta = pos - point
         distance = unit.norm(delta)
         if distance > 0.1:
-            distance2 = distance*distance
-            direction -= delta/(distance2*distance2)
+            distance2 = distance * distance
+            direction -= delta / (distance2 * distance2)
     direction /= unit.norm(direction)
     return direction
 
-class PDBFixer(object):
-    """PDBFixer implements many tools for fixing problems in PDB and PDBx/mmCIF files.
-    """
 
-    def __init__(self, filename=None, pdbfile=None, pdbxfile=None, url=None, pdbid=None):
+class PDBFixer(object):
+    """PDBFixer implements many tools for fixing problems in PDB and PDBx/mmCIF files."""
+
+    def __init__(
+        self, filename=None, pdbfile=None, pdbxfile=None, url=None, pdbid=None
+    ):
         """Create a new PDBFixer instance to fix problems in a PDB or PDBx/mmCIF file.
 
         Parameters
@@ -230,24 +769,37 @@ class PDBFixer(object):
         """
 
         # Check to make sure only one option has been specified.
-        if bool(filename) + bool(pdbfile) + bool(pdbxfile) + bool(url) + bool(pdbid) != 1:
-            raise Exception("Exactly one option [filename, pdbfile, pdbxfile, url, pdbid] must be specified.")
+        if (
+            bool(filename)
+            + bool(pdbfile)
+            + bool(pdbxfile)
+            + bool(url)
+            + bool(pdbid)
+            != 1
+        ):
+            raise Exception(
+                "Exactly one option [filename, pdbfile, pdbxfile, url, pdbid] must be specified."
+            )
 
         self.source = None
         if pdbid:
             # A PDB id has been specified.
-            url = 'http://www.rcsb.org/pdb/files/%s.pdb' % pdbid
+            url = "http://www.rcsb.org/pdb/files/%s.pdb" % pdbid
         if filename:
             # A local file has been specified.
             self.source = filename
-            file = open(filename, 'r')
-            if _guessFileFormat(file, filename) == 'pdbx':
+            file = open(filename, "r")
+            if _guessFileFormat(file, filename) == "pdbx":
                 self._initializeFromPDBx(file)
             else:
+                self.header_info = parse_pdb_header(filename)
+                print(self.header_info)
                 self._initializeFromPDB(file)
             file.close()
         elif pdbfile:
             # A file-like object has been specified.
+            self.header_info = parse_pdb_header(filename)
+            print(self.header_info)
             self._initializeFromPDB(pdbfile)
         elif pdbxfile:
             # A file-like object has been specified.
@@ -256,10 +808,10 @@ class PDBFixer(object):
             # A URL has been specified.
             self.source = url
             file = urlopen(url)
-            contents = file.read().decode('utf-8')
+            contents = file.read().decode("utf-8")
             file.close()
             file = StringIO(contents)
-            if _guessFileFormat(file, url) == 'pdbx':
+            if _guessFileFormat(file, url) == "pdbx":
                 self._initializeFromPDBx(contents)
             else:
                 self._initializeFromPDB(StringIO(contents))
@@ -272,7 +824,7 @@ class PDBFixer(object):
         # Load the templates.
 
         self.templates = {}
-        templatesPath = os.path.join(os.path.dirname(__file__), 'templates')
+        templatesPath = os.path.join(os.path.dirname(__file__), "templates")
         for file in os.listdir(templatesPath):
             templatePdb = app.PDBFile(os.path.join(templatesPath, file))
             name = next(templatePdb.topology.residues()).name
@@ -285,8 +837,15 @@ class PDBFixer(object):
         pdb = app.PDBFile(structure)
         self.topology = pdb.topology
         self.positions = pdb.positions
-        self.sequences = [Sequence(s.chain_id, s.residues) for s in structure.sequences]
-        self.modifiedResidues = [ModifiedResidue(r.chain_id, r.number, r.residue_name, r.standard_name) for r in structure.modified_residues]
+        self.sequences = [
+            Sequence(s.chain_id, s.residues) for s in structure.sequences
+        ]
+        self.modifiedResidues = [
+            ModifiedResidue(
+                r.chain_id, r.number, r.residue_name, r.standard_name
+            )
+            for r in structure.modified_residues
+        ]
 
     def _initializeFromPDBx(self, file):
         """Initialize this object by reading a PDBx/mmCIF file."""
@@ -305,11 +864,11 @@ class PDBFixer(object):
 
         # Load the sequence data.
 
-        sequenceData = block.getObj('entity_poly_seq')
+        sequenceData = block.getObj("entity_poly_seq")
         sequences = {}
         if sequenceData is not None:
-            entityIdCol = sequenceData.getAttributeIndex('entity_id')
-            residueCol = sequenceData.getAttributeIndex('mon_id')
+            entityIdCol = sequenceData.getAttributeIndex("entity_id")
+            residueCol = sequenceData.getAttributeIndex("mon_id")
             for row in sequenceData.getRowList():
                 entityId = row[entityIdCol]
                 residue = row[residueCol]
@@ -320,29 +879,38 @@ class PDBFixer(object):
         # Sequences are stored by "entity".  There could be multiple chains that are all the same entity, so we need to
         # convert from entities to chains.
 
-        asymData = block.getObj('struct_asym')
+        asymData = block.getObj("struct_asym")
         self.sequences = []
         if asymData is not None:
-            asymIdCol = asymData.getAttributeIndex('id')
-            entityIdCol = asymData.getAttributeIndex('entity_id')
+            asymIdCol = asymData.getAttributeIndex("id")
+            entityIdCol = asymData.getAttributeIndex("entity_id")
             for row in asymData.getRowList():
                 asymId = row[asymIdCol]
                 entityId = row[entityIdCol]
                 if entityId in sequences:
-                    self.sequences.append(Sequence(asymId, sequences[entityId]))
+                    self.sequences.append(
+                        Sequence(asymId, sequences[entityId])
+                    )
 
         # Load the modified residues.
 
-        modData = block.getObj('pdbx_struct_mod_residue')
+        modData = block.getObj("pdbx_struct_mod_residue")
         self.modifiedResidues = []
         if modData is not None:
-            asymIdCol = modData.getAttributeIndex('label_asym_id')
-            resNameCol = modData.getAttributeIndex('label_comp_id')
-            resNumCol = modData.getAttributeIndex('auth_seq_id')
-            standardResCol = modData.getAttributeIndex('parent_comp_id')
+            asymIdCol = modData.getAttributeIndex("label_asym_id")
+            resNameCol = modData.getAttributeIndex("label_comp_id")
+            resNumCol = modData.getAttributeIndex("auth_seq_id")
+            standardResCol = modData.getAttributeIndex("parent_comp_id")
             if -1 not in (asymIdCol, resNameCol, resNumCol, standardResCol):
                 for row in modData.getRowList():
-                    self.modifiedResidues.append(ModifiedResidue(row[asymIdCol], int(row[resNumCol]), row[resNameCol], row[standardResCol]))
+                    self.modifiedResidues.append(
+                        ModifiedResidue(
+                            row[asymIdCol],
+                            int(row[resNumCol]),
+                            row[resNameCol],
+                            row[standardResCol],
+                        )
+                    )
 
     def _addAtomsToTopology(self, heavyAtomsOnly, omitUnknownMolecules):
         """Create a new Topology in which missing atoms have been added.
@@ -368,73 +936,136 @@ class PDBFixer(object):
         """
 
         newTopology = app.Topology()
-        newPositions = []*unit.nanometer
+        newPositions = [] * unit.nanometer
         newAtoms = []
         existingAtomMap = {}
         addedAtomMap = {}
         addedOXT = []
-        residueCenters = [self._computeResidueCenter(res).value_in_unit(unit.nanometers) for res in self.topology.residues()]*unit.nanometers
+        residueCenters = [
+            self._computeResidueCenter(res).value_in_unit(unit.nanometers)
+            for res in self.topology.residues()
+        ] * unit.nanometers
         for chain in self.topology.chains():
-            if omitUnknownMolecules and not any(residue.name in self.templates for residue in chain.residues()):
+            if omitUnknownMolecules and not any(
+                residue.name in self.templates for residue in chain.residues()
+            ):
                 continue
             chainResidues = list(chain.residues())
             newChain = newTopology.addChain(chain.id)
             for indexInChain, residue in enumerate(chain.residues()):
-
                 # Insert missing residues here.
 
                 if (chain.index, indexInChain) in self.missingResidues:
-                    insertHere = self.missingResidues[(chain.index, indexInChain)]
+                    insertHere = self.missingResidues[
+                        (chain.index, indexInChain)
+                    ]
                     endPosition = self._computeResidueCenter(residue)
                     if indexInChain > 0:
-                        startPosition = self._computeResidueCenter(chainResidues[indexInChain-1])
-                        loopDirection = _findUnoccupiedDirection((startPosition+endPosition)/2, residueCenters)
+                        startPosition = self._computeResidueCenter(
+                            chainResidues[indexInChain - 1]
+                        )
+                        loopDirection = _findUnoccupiedDirection(
+                            (startPosition + endPosition) / 2, residueCenters
+                        )
                     else:
-                        outward = _findUnoccupiedDirection(endPosition, residueCenters)*unit.nanometers
+                        outward = (
+                            _findUnoccupiedDirection(
+                                endPosition, residueCenters
+                            )
+                            * unit.nanometers
+                        )
                         norm = unit.norm(outward)
-                        if norm > 0*unit.nanometer:
-                            outward *= len(insertHere)*0.5*unit.nanometer/norm
-                        startPosition = endPosition+outward
+                        if norm > 0 * unit.nanometer:
+                            outward *= (
+                                len(insertHere) * 0.5 * unit.nanometer / norm
+                            )
+                        startPosition = endPosition + outward
                         loopDirection = None
-                    firstIndex = int(residue.id)-len(insertHere)
-                    self._addMissingResiduesToChain(newChain, insertHere, startPosition, endPosition, loopDirection, residue, newAtoms, newPositions, firstIndex)
+                    firstIndex = int(residue.id) - len(insertHere)
+                    self._addMissingResiduesToChain(
+                        newChain,
+                        insertHere,
+                        startPosition,
+                        endPosition,
+                        loopDirection,
+                        residue,
+                        newAtoms,
+                        newPositions,
+                        firstIndex,
+                    )
 
                 # Create the new residue and add existing heavy atoms.
 
-                newResidue = newTopology.addResidue(residue.name, newChain, residue.id, residue.insertionCode)
+                newResidue = newTopology.addResidue(
+                    residue.name, newChain, residue.id, residue.insertionCode
+                )
                 for atom in residue.atoms():
-                    if not heavyAtomsOnly or (atom.element is not None and atom.element != hydrogen):
-                        if atom.name == 'OXT' and (chain.index, indexInChain+1) in self.missingResidues:
-                            continue # Remove terminal oxygen, since we'll add more residues after this one
-                        newAtom = newTopology.addAtom(atom.name, atom.element, newResidue)
+                    if not heavyAtomsOnly or (
+                        atom.element is not None and atom.element != hydrogen
+                    ):
+                        if (
+                            atom.name == "OXT"
+                            and (chain.index, indexInChain + 1)
+                            in self.missingResidues
+                        ):
+                            continue  # Remove terminal oxygen, since we'll add more residues after this one
+                        newAtom = newTopology.addAtom(
+                            atom.name, atom.element, newResidue
+                        )
                         existingAtomMap[atom] = newAtom
                         newPositions.append(self.positions[atom.index])
                 if residue in self.missingAtoms:
-
                     # Find corresponding atoms in the residue and the template.
 
                     template = self.templates[residue.name]
-                    atomPositions = dict((atom.name, self.positions[atom.index]) for atom in residue.atoms())
+                    atomPositions = dict(
+                        (atom.name, self.positions[atom.index])
+                        for atom in residue.atoms()
+                    )
                     points1 = []
                     points2 = []
                     for atom in template.topology.atoms():
                         if atom.name in atomPositions:
-                            points1.append(atomPositions[atom.name].value_in_unit(unit.nanometer))
-                            points2.append(template.positions[atom.index].value_in_unit(unit.nanometer))
+                            points1.append(
+                                atomPositions[atom.name].value_in_unit(
+                                    unit.nanometer
+                                )
+                            )
+                            points2.append(
+                                template.positions[atom.index].value_in_unit(
+                                    unit.nanometer
+                                )
+                            )
 
                     # Compute the optimal transform to overlay them.
 
-                    (translate2, rotate, translate1) = _overlayPoints(points1, points2)
+                    (translate2, rotate, translate1) = _overlayPoints(
+                        points1, points2
+                    )
 
                     # Add the missing atoms.
 
                     addedAtomMap[residue] = {}
                     for atom in self.missingAtoms[residue]:
-                        newAtom = newTopology.addAtom(atom.name, atom.element, newResidue)
+                        newAtom = newTopology.addAtom(
+                            atom.name, atom.element, newResidue
+                        )
                         newAtoms.append(newAtom)
                         addedAtomMap[residue][atom] = newAtom
-                        templatePosition = template.positions[atom.index].value_in_unit(unit.nanometer)
-                        newPositions.append((mm.Vec3(*np.dot(rotate, templatePosition+translate2))+translate1)*unit.nanometer)
+                        templatePosition = template.positions[
+                            atom.index
+                        ].value_in_unit(unit.nanometer)
+                        newPositions.append(
+                            (
+                                mm.Vec3(
+                                    *np.dot(
+                                        rotate, templatePosition + translate2
+                                    )
+                                )
+                                + translate1
+                            )
+                            * unit.nanometer
+                        )
                 if residue in self.missingTerminals:
                     terminalsToAdd = self.missingTerminals[residue]
                 else:
@@ -442,44 +1073,87 @@ class PDBFixer(object):
 
                 # If this is the end of the chain, add any missing residues that come after it.
 
-                if residue == chainResidues[-1] and (chain.index, indexInChain+1) in self.missingResidues:
-                    insertHere = self.missingResidues[(chain.index, indexInChain+1)]
+                if (
+                    residue == chainResidues[-1]
+                    and (chain.index, indexInChain + 1) in self.missingResidues
+                ):
+                    insertHere = self.missingResidues[
+                        (chain.index, indexInChain + 1)
+                    ]
                     if len(insertHere) > 0:
                         startPosition = self._computeResidueCenter(residue)
-                        outward = _findUnoccupiedDirection(startPosition, residueCenters)*unit.nanometers
+                        outward = (
+                            _findUnoccupiedDirection(
+                                startPosition, residueCenters
+                            )
+                            * unit.nanometers
+                        )
                         norm = unit.norm(outward)
-                        if norm > 0*unit.nanometer:
-                            outward *= len(insertHere)*0.5*unit.nanometer/norm
-                        endPosition = startPosition+outward
-                        firstIndex = int(residue.id)+1
-                        self._addMissingResiduesToChain(newChain, insertHere, startPosition, endPosition, None, residue, newAtoms, newPositions, firstIndex)
+                        if norm > 0 * unit.nanometer:
+                            outward *= (
+                                len(insertHere) * 0.5 * unit.nanometer / norm
+                            )
+                        endPosition = startPosition + outward
+                        firstIndex = int(residue.id) + 1
+                        self._addMissingResiduesToChain(
+                            newChain,
+                            insertHere,
+                            startPosition,
+                            endPosition,
+                            None,
+                            residue,
+                            newAtoms,
+                            newPositions,
+                            firstIndex,
+                        )
                         newResidue = list(newChain.residues())[-1]
                         if newResidue.name in proteinResidues:
-                            terminalsToAdd = ['OXT']
+                            terminalsToAdd = ["OXT"]
                         else:
                             terminalsToAdd = None
 
                 # If a terminal OXT is missing, add it.
 
                 if terminalsToAdd is not None:
-                    atomPositions = dict((atom.name, newPositions[atom.index].value_in_unit(unit.nanometer)) for atom in newResidue.atoms())
-                    if 'OXT' in terminalsToAdd:
-                        newAtom = newTopology.addAtom('OXT', oxygen, newResidue)
+                    atomPositions = dict(
+                        (
+                            atom.name,
+                            newPositions[atom.index].value_in_unit(
+                                unit.nanometer
+                            ),
+                        )
+                        for atom in newResidue.atoms()
+                    )
+                    if "OXT" in terminalsToAdd:
+                        newAtom = newTopology.addAtom(
+                            "OXT", oxygen, newResidue
+                        )
                         newAtoms.append(newAtom)
                         addedOXT.append(newAtom)
-                        d_ca_o = atomPositions['O']-atomPositions['CA']
-                        d_ca_c = atomPositions['C']-atomPositions['CA']
+                        d_ca_o = atomPositions["O"] - atomPositions["CA"]
+                        d_ca_c = atomPositions["C"] - atomPositions["CA"]
                         d_ca_c /= unit.sqrt(unit.dot(d_ca_c, d_ca_c))
-                        v = d_ca_o - d_ca_c*unit.dot(d_ca_c, d_ca_o)
-                        newPositions.append((atomPositions['O']+2*v)*unit.nanometer)
-        newTopology.setUnitCellDimensions(self.topology.getUnitCellDimensions())
+                        v = d_ca_o - d_ca_c * unit.dot(d_ca_c, d_ca_o)
+                        newPositions.append(
+                            (atomPositions["O"] + 2 * v) * unit.nanometer
+                        )
+        newTopology.setUnitCellDimensions(
+            self.topology.getUnitCellDimensions()
+        )
         newTopology.createStandardBonds()
         newTopology.createDisulfideBonds(newPositions)
 
         # Add the bonds between atoms in heterogens.
 
-        for a1,a2 in self.topology.bonds():
-            if a1 in existingAtomMap and a2 in existingAtomMap and (a1.residue.name not in app.Topology._standardBonds or a2.residue.name not in app.Topology._standardBonds):
+        for a1, a2 in self.topology.bonds():
+            if (
+                a1 in existingAtomMap
+                and a2 in existingAtomMap
+                and (
+                    a1.residue.name not in app.Topology._standardBonds
+                    or a2.residue.name not in app.Topology._standardBonds
+                )
+            ):
                 newTopology.addBond(existingAtomMap[a1], existingAtomMap[a2])
 
         # Return the results.
@@ -488,22 +1162,38 @@ class PDBFixer(object):
 
     def _computeResidueCenter(self, residue):
         """Compute the centroid of a residue."""
-        return unit.sum([self.positions[atom.index] for atom in residue.atoms()])/len(list(residue.atoms()))
+        return unit.sum(
+            [self.positions[atom.index] for atom in residue.atoms()]
+        ) / len(list(residue.atoms()))
 
-    def _addMissingResiduesToChain(self, chain, residueNames, startPosition, endPosition, loopDirection, orientTo, newAtoms, newPositions, firstIndex):
+    def _addMissingResiduesToChain(
+        self,
+        chain,
+        residueNames,
+        startPosition,
+        endPosition,
+        loopDirection,
+        orientTo,
+        newAtoms,
+        newPositions,
+        firstIndex,
+    ):
         """Add a series of residues to a chain."""
-        orientToPositions = dict((atom.name, self.positions[atom.index]) for atom in orientTo.atoms())
+        orientToPositions = dict(
+            (atom.name, self.positions[atom.index])
+            for atom in orientTo.atoms()
+        )
         if loopDirection is None:
             loopDirection = mm.Vec3(0, 0, 0)
 
         # We'll add the residues in an arc connecting the endpoints.  Figure out the height of that arc.
 
-        length = unit.norm(endPosition-startPosition)
+        length = unit.norm(endPosition - startPosition)
         numResidues = len(residueNames)
-        if length > numResidues*0.3*unit.nanometers:
-            loopHeight = 0*unit.nanometers
+        if length > numResidues * 0.3 * unit.nanometers:
+            loopHeight = 0 * unit.nanometers
         else:
-            loopHeight = (numResidues*0.3*unit.nanometers-length)/2
+            loopHeight = (numResidues * 0.3 * unit.nanometers - length) / 2
 
         # Add the residues.
 
@@ -516,23 +1206,48 @@ class PDBFixer(object):
             points2 = []
             for atom in template.topology.atoms():
                 if atom.name in orientToPositions:
-                    points1.append(orientToPositions[atom.name].value_in_unit(unit.nanometer))
-                    points2.append(template.positions[atom.index].value_in_unit(unit.nanometer))
+                    points1.append(
+                        orientToPositions[atom.name].value_in_unit(
+                            unit.nanometer
+                        )
+                    )
+                    points2.append(
+                        template.positions[atom.index].value_in_unit(
+                            unit.nanometer
+                        )
+                    )
             (translate2, rotate, translate1) = _overlayPoints(points1, points2)
 
             # Create the new residue.
 
-            newResidue = chain.topology.addResidue(residueName, chain, "%d" % ((firstIndex+i)%10000))
-            fraction = (i+1.0)/(numResidues+1.0)
-            translate = startPosition + (endPosition-startPosition)*fraction + loopHeight*math.sin(fraction*math.pi)*loopDirection
+            newResidue = chain.topology.addResidue(
+                residueName, chain, "%d" % ((firstIndex + i) % 10000)
+            )
+            fraction = (i + 1.0) / (numResidues + 1.0)
+            translate = (
+                startPosition
+                + (endPosition - startPosition) * fraction
+                + loopHeight * math.sin(fraction * math.pi) * loopDirection
+            )
             templateAtoms = list(template.topology.atoms())
             if newResidue == next(chain.residues()):
-                templateAtoms = [atom for atom in templateAtoms if atom.name not in ('P', 'OP1', 'OP2')]
+                templateAtoms = [
+                    atom
+                    for atom in templateAtoms
+                    if atom.name not in ("P", "OP1", "OP2")
+                ]
             for atom in templateAtoms:
-                newAtom = chain.topology.addAtom(atom.name, atom.element, newResidue)
+                newAtom = chain.topology.addAtom(
+                    atom.name, atom.element, newResidue
+                )
                 newAtoms.append(newAtom)
-                templatePosition = template.positions[atom.index].value_in_unit(unit.nanometer)
-                newPositions.append(mm.Vec3(*np.dot(rotate, templatePosition))*unit.nanometer+translate)
+                templatePosition = template.positions[
+                    atom.index
+                ].value_in_unit(unit.nanometer)
+                newPositions.append(
+                    mm.Vec3(*np.dot(rotate, templatePosition)) * unit.nanometer
+                    + translate
+                )
 
     def removeChains(self, chainIndices=None, chainIds=None):
         """Remove a set of chains from the structure.
@@ -565,7 +1280,7 @@ class PDBFixer(object):
             chainIndices = list()
         if chainIds != None:
             # Add all chains that match the selection to the list.
-            for (chainNumber, chain) in enumerate(allChains):
+            for chainNumber, chain in enumerate(allChains):
                 if chain.id in chainIds:
                     chainIndices.append(chainNumber)
             # Ensure only unique entries remain.
@@ -584,9 +1299,10 @@ class PDBFixer(object):
     def findMissingResidues(self):
         """Find residues that are missing from the structure.
 
-        The results are stored into the missingResidues field, which is a dict.  Each key is a tuple consisting of
-        the index of a chain, and the residue index within that chain at which new residues should be inserted.
-        The corresponding value is a list of the names of residues to insert there.
+        The results are stored into the missingResidues field, which is a dict.
+        Each key is a tuple consisting of the index of a chain, and the residue
+        index within that chain at which new residues should be inserted. The
+        corresponding value is a list of the names of residues to insert there.
 
         Examples
         --------
@@ -596,42 +1312,102 @@ class PDBFixer(object):
         >>> missing_residues = fixer.missingResidues
 
         """
-        chains = [c for c in self.topology.chains() if len(list(c.residues())) > 0]
+
+        def _align_seq_to_chain(seq, resnames, resids, n_consecutive=5):
+            """
+            Author: Sebastian Pagel Aligns a sequence to a chain by finding the
+            first n_consecutive consecutive residues in the chain
+            """
+            # first 5 consecutive residues in resnames by resids
+            consecutive_residues = []
+            for i in range(0, len(resids) - n_consecutive - 1):
+                if (
+                    resids[i] + n_consecutive - 1
+                    == resids[i + n_consecutive - 1]
+                ):
+                    consecutive_residues = resnames[i: i + 5]
+                    break
+            if len(consecutive_residues) == 0:
+                return None
+            # align seq to consecutive residues
+            n_previous = 0
+            for i in range(0, len(seq) - n_consecutive - 1):
+                if seq[i: i + n_consecutive] == consecutive_residues:
+                    n_previous = i
+                    break
+            if n_previous == 0:
+                return 0
+            return n_previous
+
+        chains = [
+            c for c in self.topology.chains() if len(list(c.residues())) > 0
+        ]
         chainWithGaps = {}
 
         # Find the sequence of each chain, with gaps for missing residues.
-
         for chain in chains:
+            # find the missing residues according to remark 465
+            # find min and max index according to remakrd 465
+
+            print(chain)
             residues = list(chain.residues())
             ids = [int(r.id) for r in residues]
+            res_names = [r.name for r in residues]
+            seq_names = [
+                sequence.residues
+                for sequence in self.sequences
+                if sequence.chainId == chain.id
+            ][0]
+            print("Seq names:", ids)
+            offset = _align_seq_to_chain(seq_names, res_names, ids)
+            print("Offset:", offset)
             for i, res in enumerate(residues):
-                if res.insertionCode not in ('', ' '):
+                # print(res.insertionCode, res.name, res.id)
+                if res.insertionCode not in ("", " "):
                     for j in range(i, len(residues)):
                         ids[j] += 1
-            minResidue = min(ids)
-            maxResidue = max(ids)
-            chainWithGaps[chain] = [None]*(maxResidue-minResidue+1)
-            for r, id in zip(residues, ids):
-                chainWithGaps[chain][id-minResidue] = r.name
 
+            # these have to be changed to min max also considering seqres
+            minResidue = min(ids) - offset
+            maxResidue = max(len(seq_names) + minResidue, max(ids))
+            print(len(seq_names), seq_names)
+            print(len(res_names), res_names)
+            print(" min Residues:", minResidue)
+            print(" max Residues:", maxResidue)
+            chainWithGaps[chain] = [None] * (maxResidue - minResidue + 1)
+            for r, id in zip(residues, ids):
+                # print("Residue:", r.name, id)
+                chainWithGaps[chain][id - minResidue] = r.name
+        # print("Chain with gaps:", chainWithGaps)
         # Try to find the chain that matches each sequence.
 
         chainSequence = {}
         chainOffset = {}
+        print("Sequences:", self.sequences.__dir__())
+
         for sequence in self.sequences:
+            print("sequence", sequence.residues)
             for chain in chains:
                 if chain.id != sequence.chainId:
                     continue
                 if chain in chainSequence:
                     continue
-                for offset in range(len(sequence.residues)-len(chainWithGaps[chain])+1):
-                    if all(a == b or b == None for a,b in zip(sequence.residues[offset:], chainWithGaps[chain])):
+                for offset in range(
+                    len(sequence.residues) - len(chainWithGaps[chain]) + 1
+                ):
+                    if all(
+                        a == b or b == None
+                        for a, b in zip(
+                            sequence.residues[offset:], chainWithGaps[chain]
+                        )
+                    ):
                         chainSequence[chain] = sequence
                         chainOffset[chain] = offset
                         break
                 if chain in chainSequence:
                     break
-
+        print("Chain sequence:", chainSequence)
+        print("Chain offset:", chainOffset)
         # Now build the list of residues to add.
 
         self.missingResidues = {}
@@ -642,7 +1418,11 @@ class PDBFixer(object):
                 gappedSequence = chainWithGaps[chain]
                 index = 0
                 for i in range(len(sequence)):
-                    if i < offset or i >= len(gappedSequence)+offset or gappedSequence[i-offset] is None:
+                    if (
+                        i < offset
+                        or i >= len(gappedSequence) + offset
+                        or gappedSequence[i - offset] is None
+                    ):
                         key = (chain.index, index)
                         if key not in self.missingResidues:
                             self.missingResidues[key] = []
@@ -672,21 +1452,31 @@ class PDBFixer(object):
 
         # First find residues based on our table of standard substitutions.
 
-        nonstandard = dict((r, substitutions[r.name]) for r in self.topology.residues() if r.name in substitutions)
+        nonstandard = dict(
+            (r, substitutions[r.name])
+            for r in self.topology.residues()
+            if r.name in substitutions
+        )
 
         # Now add ones based on MODRES records.
 
-        modres = dict(((m.chainId, str(m.number), m.residueName), m.standardName) for m in self.modifiedResidues)
+        modres = dict(
+            ((m.chainId, str(m.number), m.residueName), m.standardName)
+            for m in self.modifiedResidues
+        )
         for chain in self.topology.chains():
             for residue in chain.residues():
                 key = (chain.id, residue.id, residue.name)
                 if key in modres:
                     replacement = modres[key]
-                    if replacement == 'DU':
-                        replacement = 'DT'
+                    if replacement == "DU":
+                        replacement = "DT"
                     if replacement in self.templates:
                         nonstandard[residue] = replacement
-        self.nonstandardResidues = [(r, nonstandard[r]) for r in sorted(nonstandard, key=lambda r: r.index)]
+        self.nonstandardResidues = [
+            (r, nonstandard[r])
+            for r in sorted(nonstandard, key=lambda r: r.index)
+        ]
 
     def replaceNonstandardResidues(self):
         """Replace every residue listed in the nonstandardResidues field with the specified standard residue.
@@ -713,9 +1503,14 @@ class PDBFixer(object):
             for residue, replaceWith in self.nonstandardResidues:
                 residue.name = replaceWith
                 template = self.templates[replaceWith]
-                standardAtoms = set(atom.name for atom in template.topology.atoms())
+                standardAtoms = set(
+                    atom.name for atom in template.topology.atoms()
+                )
                 for atom in residue.atoms():
-                    if atom.element in (None, hydrogen) or atom.name not in standardAtoms:
+                    if (
+                        atom.element in (None, hydrogen)
+                        or atom.name not in standardAtoms
+                    ):
                         deleteAtoms.append(atom)
 
             # Delete them.
@@ -724,7 +1519,6 @@ class PDBFixer(object):
             modeller.delete(deleteAtoms)
             self.topology = modeller.topology
             self.positions = modeller.positions
-
 
     def applyMutations(self, mutations, chain_id):
         """Apply a list of amino acid substitutions to make a mutant protein.
@@ -761,46 +1555,68 @@ class PDBFixer(object):
         """
         # Retrieve all residues that match the specified chain_id.
         # NOTE: Multiple chains may have the same chainid, but must have unique resSeq entries.
-        resSeq_to_residue = dict() # resSeq_to_residue[resid] is the residue in the requested chain corresponding to residue identifier 'resid'
+        resSeq_to_residue = dict()  # resSeq_to_residue[resid] is the residue in the requested chain corresponding to residue identifier 'resid'
         for chain in self.topology.chains():
             if chain.id == chain_id:
                 for residue in chain.residues():
                     resSeq_to_residue[int(residue.id)] = residue
 
         # Make a map of residues to mutate based on requested mutation list.
-        residue_map = dict() # residue_map[residue] is the name of the new residue to mutate to, if a mutation is desired
+        residue_map = dict()  # residue_map[residue] is the name of the new residue to mutate to, if a mutation is desired
         for mut_str in mutations:
             old_name, resSeq, new_name = mut_str.split("-")
             resSeq = int(resSeq)
 
             if resSeq not in resSeq_to_residue:
-                raise(KeyError("Cannot find chain %s residue %d in system!" % (chain_id, resSeq)))
+                raise (
+                    KeyError(
+                        "Cannot find chain %s residue %d in system!"
+                        % (chain_id, resSeq)
+                    )
+                )
 
-            residue = resSeq_to_residue[resSeq] # retrieve the requested residue
+            residue = resSeq_to_residue[
+                resSeq
+            ]  # retrieve the requested residue
 
             if residue.name != old_name:
-                raise(ValueError("You asked to mutate chain %s residue %d name %s, but that residue is actually %s!" % (chain_id, resSeq, old_name, residue.name)))
+                raise (
+                    ValueError(
+                        "You asked to mutate chain %s residue %d name %s, but that residue is actually %s!"
+                        % (chain_id, resSeq, old_name, residue.name)
+                    )
+                )
 
             try:
                 template = self.templates[new_name]
             except KeyError:
-                raise(KeyError("Cannot find residue %s in template library!" % new_name))
+                raise (
+                    KeyError(
+                        "Cannot find residue %s in template library!"
+                        % new_name
+                    )
+                )
 
             # Store mutation
             residue_map[residue] = new_name
 
         # If there are mutations to be made, make them.
         if len(residue_map) > 0:
-            deleteAtoms = [] # list of atoms to delete
+            deleteAtoms = []  # list of atoms to delete
 
             # Find atoms that should be deleted.
             for residue in residue_map.keys():
                 replaceWith = residue_map[residue]
                 residue.name = replaceWith
                 template = self.templates[replaceWith]
-                standardAtoms = set(atom.name for atom in template.topology.atoms())
+                standardAtoms = set(
+                    atom.name for atom in template.topology.atoms()
+                )
                 for atom in residue.atoms():
-                    if atom.element in (None, hydrogen) or atom.name not in standardAtoms:
+                    if (
+                        atom.element in (None, hydrogen)
+                        or atom.name not in standardAtoms
+                    ):
                         deleteAtoms.append(atom)
 
             # Delete atoms queued to be deleted.
@@ -808,7 +1624,6 @@ class PDBFixer(object):
             modeller.delete(deleteAtoms)
             self.topology = modeller.topology
             self.positions = modeller.positions
-
 
     def findMissingAtoms(self):
         """Find heavy atoms that are missing from the structure.
@@ -848,8 +1663,15 @@ class PDBFixer(object):
                     template = self.templates[residue.name]
                     atomNames = set(atom.name for atom in residue.atoms())
                     templateAtoms = list(template.topology.atoms())
-                    if residue == chainResidues[0] and (chain.index, 0) not in self.missingResidues:
-                        templateAtoms = [atom for atom in templateAtoms if atom.name not in ('P', 'OP1', 'OP2')]
+                    if (
+                        residue == chainResidues[0]
+                        and (chain.index, 0) not in self.missingResidues
+                    ):
+                        templateAtoms = [
+                            atom
+                            for atom in templateAtoms
+                            if atom.name not in ("P", "OP1", "OP2")
+                        ]
 
                     # Add atoms from the template that are missing.
 
@@ -863,10 +1685,18 @@ class PDBFixer(object):
                     # Add missing terminal atoms.
 
                     terminals = []
-                    if residue == chainResidues[-1] and (chain.index, len(chainResidues)) not in self.missingResidues:
-                        templateNames = set(atom.name for atom in template.topology.atoms())
-                        if 'OXT' not in atomNames and all(name in templateNames for name in ['C', 'O', 'CA']):
-                            terminals.append('OXT')
+                    if (
+                        residue == chainResidues[-1]
+                        and (chain.index, len(chainResidues))
+                        not in self.missingResidues
+                    ):
+                        templateNames = set(
+                            atom.name for atom in template.topology.atoms()
+                        )
+                        if "OXT" not in atomNames and all(
+                            name in templateNames for name in ["C", "O", "CA"]
+                        ):
+                            terminals.append("OXT")
                         if len(terminals) > 0:
                             missingTerminals[residue] = terminals
         self.missingAtoms = missingAtoms
@@ -899,9 +1729,13 @@ class PDBFixer(object):
 
         # Create a Topology that 1) adds missing atoms, 2) removes all hydrogens, and 3) removes unknown molecules.
 
-        (newTopology, newPositions, newAtoms, existingAtomMap) = self._addAtomsToTopology(True, True)
+        (
+            newTopology,
+            newPositions,
+            newAtoms,
+            existingAtomMap,
+        ) = self._addAtomsToTopology(True, True)
         if len(newAtoms) == 0:
-
             # No atoms were added, but new bonds might have been created.
 
             newBonds = set(newTopology.bonds())
@@ -916,11 +1750,12 @@ class PDBFixer(object):
 
             # Add the new bonds to the original Topology.
 
-            inverseAtomMap = dict((y,x) for (x,y) in existingAtomMap.items())
+            inverseAtomMap = dict((y, x) for (x, y) in existingAtomMap.items())
             for atom1, atom2 in newBonds:
-                self.topology.addBond(inverseAtomMap[atom1], inverseAtomMap[atom2])
+                self.topology.addBond(
+                    inverseAtomMap[atom1], inverseAtomMap[atom2]
+                )
         else:
-
             # Create a System for energy minimizing it.
 
             forcefield = self._createForceField(newTopology, False)
@@ -933,20 +1768,32 @@ class PDBFixer(object):
 
             # If any heavy atoms were omitted, add them back to avoid steric clashes.
 
-            nonbonded = [f for f in system.getForces() if isinstance(f, mm.CustomNonbondedForce)][0]
+            nonbonded = [
+                f
+                for f in system.getForces()
+                if isinstance(f, mm.CustomNonbondedForce)
+            ][0]
             for atom in self.topology.atoms():
-                if atom.element not in (None, hydrogen) and atom not in existingAtomMap:
+                if (
+                    atom.element not in (None, hydrogen)
+                    and atom not in existingAtomMap
+                ):
                     system.addParticle(0.0)
                     nonbonded.addParticle([])
                     newPositions.append(self.positions[atom.index])
 
             # For efficiency, only compute interactions that involve a new atom.
 
-            nonbonded.addInteractionGroup([atom.index for atom in newAtoms], range(system.getNumParticles()))
+            nonbonded.addInteractionGroup(
+                [atom.index for atom in newAtoms],
+                range(system.getNumParticles()),
+            )
 
             # Do an energy minimization.
 
-            integrator = mm.LangevinIntegrator(300*unit.kelvin, 10/unit.picosecond, 5*unit.femtosecond)
+            integrator = mm.LangevinIntegrator(
+                300 * unit.kelvin, 10 / unit.picosecond, 5 * unit.femtosecond
+            )
             if seed is not None:
                 integrator.setRandomNumberSeed(seed)
             context = mm.Context(system, integrator)
@@ -957,36 +1804,47 @@ class PDBFixer(object):
                 # When looking for pairs of atoms that are too close to each other, exclude pairs that
                 # are in the same residue or are directly bonded to each other.
 
-                exclusions = dict((atom, {a.index for a in atom.residue.atoms()}) for atom in newAtoms)
+                exclusions = dict(
+                    (atom, {a.index for a in atom.residue.atoms()})
+                    for atom in newAtoms
+                )
                 for a1, a2 in newTopology.bonds():
                     if a1 in exclusions:
                         exclusions[a1].add(a2.index)
                     if a2 in exclusions:
                         exclusions[a2].add(a1.index)
                 cutoff = 0.13
-                nearest = self._findNearestDistance(context, newAtoms, cutoff, exclusions)
+                nearest = self._findNearestDistance(
+                    context, newAtoms, cutoff, exclusions
+                )
                 if nearest < cutoff:
-
                     # Some atoms are very close together.  Run some dynamics while slowly increasing the strength of the
                     # repulsive interaction to try to improve the result.
 
                     for i in range(10):
-                        context.setParameter('C', 0.15*(i+1))
+                        context.setParameter("C", 0.15 * (i + 1))
                         integrator.step(200)
-                        d = self._findNearestDistance(context, newAtoms, cutoff, exclusions)
+                        d = self._findNearestDistance(
+                            context, newAtoms, cutoff, exclusions
+                        )
                         if d > nearest:
                             nearest = d
                             state = context.getState(getPositions=True)
                             if nearest >= cutoff:
                                 break
                     context.setState(state)
-                    context.setParameter('C', 1.0)
+                    context.setParameter("C", 1.0)
                     mm.LocalEnergyMinimizer.minimize(context)
                     state = context.getState(getPositions=True)
 
             # Now create a new Topology, including all atoms from the original one and adding the missing atoms.
 
-            (newTopology2, newPositions2, newAtoms2, existingAtomMap2) = self._addAtomsToTopology(False, False)
+            (
+                newTopology2,
+                newPositions2,
+                newAtoms2,
+                existingAtomMap2,
+            ) = self._addAtomsToTopology(False, False)
 
             # Copy over the minimized positions for the new atoms.
 
@@ -1014,10 +1872,10 @@ class PDBFixer(object):
         """
 
         keep = set(proteinResidues).union(dnaResidues).union(rnaResidues)
-        keep.add('N')
-        keep.add('UNK')
+        keep.add("N")
+        keep.add("UNK")
         if keepWater:
-            keep.add('HOH')
+            keep.add("HOH")
         toDelete = []
         for residue in self.topology.residues():
             if residue.name not in keep:
@@ -1058,7 +1916,16 @@ class PDBFixer(object):
         self.topology = modeller.topology
         self.positions = modeller.positions
 
-    def addSolvent(self, boxSize=None, padding=None, boxVectors=None, positiveIon='Na+', negativeIon='Cl-', ionicStrength=0*unit.molar, boxShape='cube'):
+    def addSolvent(
+        self,
+        boxSize=None,
+        padding=None,
+        boxVectors=None,
+        positiveIon="Na+",
+        negativeIon="Cl-",
+        ionicStrength=0 * unit.molar,
+        boxShape="cube",
+    ):
         """Add a solvent box surrounding the structure.
 
         Parameters
@@ -1094,16 +1961,33 @@ class PDBFixer(object):
 
         modeller = app.Modeller(self.topology, self.positions)
         forcefield = self._createForceField(self.topology, True)
-        modeller.addSolvent(forcefield, padding=padding, boxSize=boxSize, boxVectors=boxVectors, boxShape=boxShape, positiveIon=positiveIon, negativeIon=negativeIon, ionicStrength=ionicStrength)
+        modeller.addSolvent(
+            forcefield,
+            padding=padding,
+            boxSize=boxSize,
+            boxVectors=boxVectors,
+            boxShape=boxShape,
+            positiveIon=positiveIon,
+            negativeIon=negativeIon,
+            ionicStrength=ionicStrength,
+        )
         chains = list(modeller.topology.chains())
         if len(chains) == 1:
-            chains[0].id = 'A'
+            chains[0].id = "A"
         else:
-            chains[-1].id = chr(ord(chains[-2].id)+1)
+            chains[-1].id = chr(ord(chains[-2].id) + 1)
         self.topology = modeller.topology
         self.positions = modeller.positions
 
-    def addMembrane(self, lipidType='POPC', membraneCenterZ=0*unit.nanometer, minimumPadding=1*unit.nanometer, positiveIon='Na+', negativeIon='Cl-', ionicStrength=0*unit.molar):
+    def addMembrane(
+        self,
+        lipidType="POPC",
+        membraneCenterZ=0 * unit.nanometer,
+        minimumPadding=1 * unit.nanometer,
+        positiveIon="Na+",
+        negativeIon="Cl-",
+        ionicStrength=0 * unit.molar,
+    ):
         """Add a lipid membrane to the structure.
 
         This method adds both lipids and water, so you should call either addSolvent() or addMembrane(),
@@ -1126,12 +2010,19 @@ class PDBFixer(object):
         """
         modeller = app.Modeller(self.topology, self.positions)
         forcefield = self._createForceField(self.topology, True)
-        modeller.addMembrane(forcefield, lipidType=lipidType, minimumPadding=minimumPadding, positiveIon=positiveIon, negativeIon=negativeIon, ionicStrength=ionicStrength)
+        modeller.addMembrane(
+            forcefield,
+            lipidType=lipidType,
+            minimumPadding=minimumPadding,
+            positiveIon=positiveIon,
+            negativeIon=negativeIon,
+            ionicStrength=ionicStrength,
+        )
         chains = list(modeller.topology.chains())
         if len(chains) == 1:
-            chains[0].id = 'A'
+            chains[0].id = "A"
         else:
-            chains[-1].id = chr(ord(chains[-2].id)+1)
+            chains[-1].id = chr(ord(chains[-2].id) + 1)
         self.topology = modeller.topology
         self.positions = modeller.positions
 
@@ -1139,12 +2030,34 @@ class PDBFixer(object):
         """Create a force field to use for optimizing the positions of newly added atoms."""
 
         if water:
-            forcefield = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
-            nonbonded = [f for f in forcefield._forces if isinstance(f, NonbondedGenerator)][0]
-            radii = {'H':0.198, 'Li':0.203, 'C':0.340, 'N':0.325, 'O':0.299, 'F':0.312, 'Na':0.333, 'Mg':0.141,
-                     'P':0.374, 'S':0.356, 'Cl':0.347, 'K':0.474, 'Br':0.396, 'Rb':0.527, 'I':0.419, 'Cs':0.605}
+            forcefield = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
+            nonbonded = [
+                f
+                for f in forcefield._forces
+                if isinstance(f, NonbondedGenerator)
+            ][0]
+            radii = {
+                "H": 0.198,
+                "Li": 0.203,
+                "C": 0.340,
+                "N": 0.325,
+                "O": 0.299,
+                "F": 0.312,
+                "Na": 0.333,
+                "Mg": 0.141,
+                "P": 0.374,
+                "S": 0.356,
+                "Cl": 0.347,
+                "K": 0.474,
+                "Br": 0.396,
+                "Rb": 0.527,
+                "I": 0.419,
+                "Cs": 0.605,
+            }
         else:
-            forcefield = app.ForceField(os.path.join(os.path.dirname(__file__), 'soft.xml'))
+            forcefield = app.ForceField(
+                os.path.join(os.path.dirname(__file__), "soft.xml")
+            )
 
         # The Topology may contain residues for which the ForceField does not have a template.
         # If so, we need to create new templates for them.
@@ -1157,25 +2070,31 @@ class PDBFixer(object):
             bondedToAtom[atom1.index].add(atom2.index)
             bondedToAtom[atom2.index].add(atom1.index)
         for residue in newTopology.residues():
-
             # Make sure the ForceField has a template for this residue.
 
-            signature = app.forcefield._createResidueSignature([atom.element for atom in residue.atoms()])
+            signature = app.forcefield._createResidueSignature(
+                [atom.element for atom in residue.atoms()]
+            )
             if signature in forcefield._templateSignatures:
-                if any(matchResidue(residue, t, bondedToAtom) is not None for t in forcefield._templateSignatures[signature]):
+                if any(
+                    matchResidue(residue, t, bondedToAtom) is not None
+                    for t in forcefield._templateSignatures[signature]
+                ):
                     continue
 
             # Create a new template.
 
-            resName = "extra_"+residue.name
+            resName = "extra_" + residue.name
             template = app.ForceField._TemplateData(resName)
             forcefield._templates[resName] = template
             indexInResidue = {}
             for atom in residue.atoms():
                 element = atom.element
-                typeName = 'extra_'+element.symbol
+                typeName = "extra_" + element.symbol
                 if element not in atomTypes:
-                    atomTypes[element] = app.ForceField._AtomType(typeName, '', 0.0, element)
+                    atomTypes[element] = app.ForceField._AtomType(
+                        typeName, "", 0.0, element
+                    )
                     forcefield._atomTypes[typeName] = atomTypes[element]
                     if water:
                         # Select a reasonable vdW radius for this atom type.
@@ -1184,13 +2103,27 @@ class PDBFixer(object):
                             sigma = radii[element.symbol]
                         else:
                             sigma = 0.5
-                        nonbonded.registerAtom({'type':typeName, 'charge':'0', 'sigma':str(sigma), 'epsilon':'0'})
+                        nonbonded.registerAtom(
+                            {
+                                "type": typeName,
+                                "charge": "0",
+                                "sigma": str(sigma),
+                                "epsilon": "0",
+                            }
+                        )
                 indexInResidue[atom.index] = len(template.atoms)
-                template.atoms.append(app.ForceField._TemplateAtomData(atom.name, typeName, element))
+                template.atoms.append(
+                    app.ForceField._TemplateAtomData(
+                        atom.name, typeName, element
+                    )
+                )
             for atom in residue.atoms():
                 for bondedTo in bondedToAtom[atom.index]:
                     if bondedTo in indexInResidue:
-                        b = (indexInResidue[atom.index], indexInResidue[bondedTo])
+                        b = (
+                            indexInResidue[atom.index],
+                            indexInResidue[bondedTo],
+                        )
                         if b[0] < b[1]:
                             template.bonds.append(b)
                             template.atoms[b[0]].bondedTo.append(b[1])
@@ -1208,16 +2141,24 @@ class PDBFixer(object):
     def _findNearestDistance(self, context, newAtoms, cutoff, exclusions):
         """Given a set of newly added atoms, find the closest distance between one of those atoms and another atom."""
 
-        positions = context.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(unit.nanometer)
-        boxSize = np.max(positions, axis=0)-np.min(positions, axis=0)
-        boxVectors = [(boxSize[0], 0, 0), (0, boxSize[1], 0), (0, 0, boxSize[2])]
+        positions = (
+            context.getState(getPositions=True)
+            .getPositions(asNumpy=True)
+            .value_in_unit(unit.nanometer)
+        )
+        boxSize = np.max(positions, axis=0) - np.min(positions, axis=0)
+        boxVectors = [
+            (boxSize[0], 0, 0),
+            (0, boxSize[1], 0),
+            (0, 0, boxSize[2]),
+        ]
         cells = app.modeller._CellList(positions, cutoff, boxVectors, False)
         nearest_squared = sys.float_info.max
         for atom in newAtoms:
             excluded = exclusions[atom]
             for i in cells.neighbors(positions[atom.index]):
                 if i not in excluded:
-                    p = positions[atom.index]-positions[i]
+                    p = positions[atom.index] - positions[i]
                     dist_squared = np.dot(p, p)
                     if dist_squared < nearest_squared:
                         nearest_squared = dist_squared
@@ -1228,72 +2169,180 @@ def main():
     if len(sys.argv) < 2:
         # Display the UI.
         from . import ui
+
         ui.launchUI()
     else:
         # Run in command line mode.
 
         from optparse import OptionParser
-        parser = OptionParser(usage="Usage: %prog\n       %prog filename [options] \n\nWhen run with no arguments, it launches the user interface.  If any arguments are specified, it runs in command line mode.")
-        parser.add_option('--pdbid', default=None, dest='pdbid', metavar='PDBID', help='PDB id to retrieve from RCSB [default: None]')
-        parser.add_option('--url', default=None, dest='url', metavar='URL', help='URL to retrieve PDB from [default: None]')
-        parser.add_option('--output', default='output.pdb', dest='output', metavar='FILENAME', help='output pdb file [default: output.pdb]')
-        parser.add_option('--add-atoms', default='all', dest='atoms', choices=('all', 'heavy', 'hydrogen', 'none'), help='which missing atoms to add: all, heavy, hydrogen, or none [default: all]')
-        parser.add_option('--keep-heterogens', default='all', dest='heterogens', choices=('all', 'water', 'none'), metavar='OPTION', help='which heterogens to keep: all, water, or none [default: all]')
-        parser.add_option('--replace-nonstandard', action='store_true', default=False, dest='nonstandard', help='replace nonstandard residues with standard equivalents')
-        parser.add_option('--add-residues', action='store_true', default=False, dest='residues', help='add missing residues')
-        parser.add_option('--water-box', dest='box', type='float', nargs=3, metavar='X Y Z', help='add a water box. The value is the box dimensions in nm [example: --water-box=2.5 2.4 3.0]')
-        parser.add_option('--ph', type='float', default=7.0, dest='ph', help='the pH to use for adding missing hydrogens [default: 7.0]')
-        parser.add_option('--positive-ion', default='Na+', dest='positiveIon', choices=('Cs+', 'K+', 'Li+', 'Na+', 'Rb+'), metavar='ION', help='positive ion to include in the water box: Cs+, K+, Li+, Na+, or Rb+ [default: Na+]')
-        parser.add_option('--negative-ion', default='Cl-', dest='negativeIon', choices=('Cl-', 'Br-', 'F-', 'I-'), metavar='ION', help='negative ion to include in the water box: Cl-, Br-, F-, or I- [default: Cl-]')
-        parser.add_option('--ionic-strength', type='float', default=0.0, dest='ionic', metavar='STRENGTH', help='molar concentration of ions to add to the water box [default: 0.0]')
-        parser.add_option('--verbose', default=False, action='store_true', dest='verbose', metavar='VERBOSE', help='Print verbose output')
+
+        parser = OptionParser(
+            usage="Usage: %prog\n       %prog filename [options] \n\nWhen run with no arguments, it launches the user interface.  If any arguments are specified, it runs in command line mode."
+        )
+        parser.add_option(
+            "--pdbid",
+            default=None,
+            dest="pdbid",
+            metavar="PDBID",
+            help="PDB id to retrieve from RCSB [default: None]",
+        )
+        parser.add_option(
+            "--url",
+            default=None,
+            dest="url",
+            metavar="URL",
+            help="URL to retrieve PDB from [default: None]",
+        )
+        parser.add_option(
+            "--output",
+            default="output.pdb",
+            dest="output",
+            metavar="FILENAME",
+            help="output pdb file [default: output.pdb]",
+        )
+        parser.add_option(
+            "--add-atoms",
+            default="all",
+            dest="atoms",
+            choices=("all", "heavy", "hydrogen", "none"),
+            help="which missing atoms to add: all, heavy, hydrogen, or none [default: all]",
+        )
+        parser.add_option(
+            "--keep-heterogens",
+            default="all",
+            dest="heterogens",
+            choices=("all", "water", "none"),
+            metavar="OPTION",
+            help="which heterogens to keep: all, water, or none [default: all]",
+        )
+        parser.add_option(
+            "--replace-nonstandard",
+            action="store_true",
+            default=False,
+            dest="nonstandard",
+            help="replace nonstandard residues with standard equivalents",
+        )
+        parser.add_option(
+            "--add-residues",
+            action="store_true",
+            default=False,
+            dest="residues",
+            help="add missing residues",
+        )
+        parser.add_option(
+            "--water-box",
+            dest="box",
+            type="float",
+            nargs=3,
+            metavar="X Y Z",
+            help="add a water box. The value is the box dimensions in nm [example: --water-box=2.5 2.4 3.0]",
+        )
+        parser.add_option(
+            "--ph",
+            type="float",
+            default=7.0,
+            dest="ph",
+            help="the pH to use for adding missing hydrogens [default: 7.0]",
+        )
+        parser.add_option(
+            "--positive-ion",
+            default="Na+",
+            dest="positiveIon",
+            choices=("Cs+", "K+", "Li+", "Na+", "Rb+"),
+            metavar="ION",
+            help="positive ion to include in the water box: Cs+, K+, Li+, Na+, or Rb+ [default: Na+]",
+        )
+        parser.add_option(
+            "--negative-ion",
+            default="Cl-",
+            dest="negativeIon",
+            choices=("Cl-", "Br-", "F-", "I-"),
+            metavar="ION",
+            help="negative ion to include in the water box: Cl-, Br-, F-, or I- [default: Cl-]",
+        )
+        parser.add_option(
+            "--ionic-strength",
+            type="float",
+            default=0.0,
+            dest="ionic",
+            metavar="STRENGTH",
+            help="molar concentration of ions to add to the water box [default: 0.0]",
+        )
+        parser.add_option(
+            "--verbose",
+            default=False,
+            action="store_true",
+            dest="verbose",
+            metavar="VERBOSE",
+            help="Print verbose output",
+        )
         (options, args) = parser.parse_args()
-        if (len(args) == 0) and (options.pdbid==None) and (options.url==None):
-            parser.error('No filename specified')
+        if (
+            (len(args) == 0)
+            and (options.pdbid == None)
+            and (options.url == None)
+        ):
+            parser.error("No filename specified")
         if len(args) > 1:
-            parser.error('Must specify a single filename or --pdbid or --url')
+            parser.error("Must specify a single filename or --pdbid or --url")
         if options.pdbid != None:
-            if options.verbose: print('Retrieving PDB "' + options.pdbid + '" from RCSB...')
+            if options.verbose:
+                print('Retrieving PDB "' + options.pdbid + '" from RCSB...')
             fixer = PDBFixer(pdbid=options.pdbid)
         elif options.url != None:
-            if options.verbose: print('Retrieving PDB from URL "' + options.url + '"...')
+            if options.verbose:
+                print('Retrieving PDB from URL "' + options.url + '"...')
             fixer = PDBFixer(url=options.url)
         else:
             fixer = PDBFixer(filename=sys.argv[1])
         if options.residues:
-            if options.verbose: print('Finding missing residues...')
+            if options.verbose:
+                print("Finding missing residues...")
             fixer.findMissingResidues()
         else:
             fixer.missingResidues = {}
         if options.nonstandard:
-            if options.verbose: print('Finding nonstandard residues...')
+            if options.verbose:
+                print("Finding nonstandard residues...")
             fixer.findNonstandardResidues()
-            if options.verbose: print('Replacing nonstandard residues...')
+            if options.verbose:
+                print("Replacing nonstandard residues...")
             fixer.replaceNonstandardResidues()
-        if options.heterogens == 'none':
+        if options.heterogens == "none":
             fixer.removeHeterogens(False)
-        elif options.heterogens == 'water':
+        elif options.heterogens == "water":
             fixer.removeHeterogens(True)
-        if options.verbose: print('Finding missing atoms...')
+        if options.verbose:
+            print("Finding missing atoms...")
         fixer.findMissingAtoms()
-        if options.atoms not in ('all', 'heavy'):
+        if options.atoms not in ("all", "heavy"):
             fixer.missingAtoms = {}
             fixer.missingTerminals = {}
-        if options.verbose: print('Adding missing atoms...')
+        if options.verbose:
+            print("Adding missing atoms...")
         fixer.addMissingAtoms()
-        if options.atoms in ('all', 'hydrogen'):
-            if options.verbose: print('Adding missing hydrogens...')
+        if options.atoms in ("all", "hydrogen"):
+            if options.verbose:
+                print("Adding missing hydrogens...")
             fixer.addMissingHydrogens(options.ph)
         if options.box is not None:
-            if options.verbose: print('Adding solvent...')
-            fixer.addSolvent(boxSize=options.box*unit.nanometer, positiveIon=options.positiveIon,
-                negativeIon=options.negativeIon, ionicStrength=options.ionic*unit.molar)
-        with open(options.output, 'w') as f:
-            if options.verbose: print('Writing output...')
+            if options.verbose:
+                print("Adding solvent...")
+            fixer.addSolvent(
+                boxSize=options.box * unit.nanometer,
+                positiveIon=options.positiveIon,
+                negativeIon=options.negativeIon,
+                ionicStrength=options.ionic * unit.molar,
+            )
+        with open(options.output, "w") as f:
+            if options.verbose:
+                print("Writing output...")
             if fixer.source is not None:
                 f.write("REMARK   1 PDBFIXER FROM: %s\n" % fixer.source)
             app.PDBFile.writeFile(fixer.topology, fixer.positions, f, True)
-        if options.verbose: print('Done.')
+        if options.verbose:
+            print("Done.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
