@@ -334,6 +334,50 @@ def _nice_case(line):
     return s
 
 
+def find_model_ids(missing_residues):
+    return set([res["model"] for res in missing_residues])
+
+
+def format_missing_residues(missing_residues):
+    missing_residues_dict = {}
+    # models_ids = find_model_ids(missing_residues)
+    for res in missing_residues:
+        model = res["model"] if res["model"] is not None else "no_model"
+        if model not in missing_residues_dict:
+            if model is not None:
+                missing_residues_dict[model] = {}
+            elif model not in missing_residues_dict:
+                missing_residues_dict[model] = {}
+        if res["chain"] not in missing_residues_dict[model]:
+            missing_residues_dict[model][res["chain"]] = {}
+        if res.get("ssseq", None) is not None:
+            missing_residues_dict[model][res["chain"]][res["ssseq"]] = (
+                res.get("res_name", None),
+                res.get("insertion", None),
+            )
+    return missing_residues_dict
+
+
+def format_missing_atoms(missing_atoms):
+    missing_atoms_dict = {}
+    # models_ids = find_model_ids(missing_atoms)
+    for res in missing_atoms:
+        model = res["model"] if res["model"] is not None else "no_model"
+        if model not in missing_atoms_dict:
+            if model is not None:
+                missing_atoms_dict[model] = {}
+            elif model not in missing_atoms_dict:
+                missing_atoms_dict[model] = {}
+        if res["chain"] not in missing_atoms_dict[model]:
+            missing_atoms_dict[model][res["chain"]] = {}
+        if res.get("SSEQI", None) is not None:
+            missing_atoms_dict[model][res["chain"]][res["SSEQI"]] = (
+                res.get("ATOMS", None),
+                res.get("insertion", None),
+            )
+    return missing_atoms_dict
+
+
 def parse_pdb_header(infile):
     """Return the header lines of a pdb file as a dictionary.
 
@@ -349,7 +393,12 @@ def parse_pdb_header(infile):
                 break
             else:
                 header.append(l)
-    return _parse_pdb_header_list(header)
+    header = _parse_pdb_header_list(header)
+    missing_atoms, missing_residues = (
+        format_missing_atoms(header["missing_atoms"]),
+        format_missing_residues(header["missing_residues"]),
+    )
+    return missing_atoms, missing_residues
 
 
 def _parse_remark_465(line):
@@ -792,14 +841,18 @@ class PDBFixer(object):
             if _guessFileFormat(file, filename) == "pdbx":
                 self._initializeFromPDBx(file)
             else:
-                self.header_info = parse_pdb_header(filename)
-                print(self.header_info)
+                (
+                    self.missing_atoms_header,
+                    self.missing_residues_header,
+                ) = parse_pdb_header(filename)
                 self._initializeFromPDB(file)
             file.close()
         elif pdbfile:
             # A file-like object has been specified.
-            self.header_info = parse_pdb_header(filename)
-            print(self.header_info)
+            (
+                self.missing_atoms_header,
+                self.missing_residues_header,
+            ) = parse_pdb_header(filename)
             self._initializeFromPDB(pdbfile)
         elif pdbxfile:
             # A file-like object has been specified.
@@ -1298,6 +1351,7 @@ class PDBFixer(object):
 
     def findMissingResidues(self):
         """Find residues that are missing from the structure.
+        FOR NOW THIS WILL ONLY CONSIDER 1 MODEL!!
 
         The results are stored into the missingResidues field, which is a dict.
         Each key is a tuple consisting of the index of a chain, and the residue
@@ -1315,8 +1369,8 @@ class PDBFixer(object):
 
         def _align_seq_to_chain(seq, resnames, resids, n_consecutive=5):
             """
-            Author: Sebastian Pagel Aligns a sequence to a chain by finding the
-            first n_consecutive consecutive residues in the chain
+            Author: Sebastian Pagel
+            Aligns a sequence to a chain by finding the first n_consecutive consecutive residues in the chain
             """
             # first 5 consecutive residues in resnames by resids
             consecutive_residues = []
@@ -1325,14 +1379,14 @@ class PDBFixer(object):
                     resids[i] + n_consecutive - 1
                     == resids[i + n_consecutive - 1]
                 ):
-                    consecutive_residues = resnames[i: i + 5]
+                    consecutive_residues = resnames[i : i + 5]
                     break
             if len(consecutive_residues) == 0:
                 return None
             # align seq to consecutive residues
             n_previous = 0
             for i in range(0, len(seq) - n_consecutive - 1):
-                if seq[i: i + n_consecutive] == consecutive_residues:
+                if seq[i : i + n_consecutive] == consecutive_residues:
                     n_previous = i
                     break
             if n_previous == 0:
@@ -1343,13 +1397,18 @@ class PDBFixer(object):
             c for c in self.topology.chains() if len(list(c.residues())) > 0
         ]
         chainWithGaps = {}
-
+        print("Chains:", chains)
+        print(self.missing_atoms_header)
+        print(self.missing_residues_header)
         # Find the sequence of each chain, with gaps for missing residues.
         for chain in chains:
             # find the missing residues according to remark 465
             # find min and max index according to remakrd 465
+            print("Chain:", chain.id)
+            min_residue_header = min(self.missing_residues_header["no_model"][chain.id].keys())
+            max_residue_header = max(self.missing_residues_header["no_model"][chain.id].keys())
+            print("min and max residue header:", min_residue_header, max_residue_header)
 
-            print(chain)
             residues = list(chain.residues())
             ids = [int(r.id) for r in residues]
             res_names = [r.name for r in residues]
